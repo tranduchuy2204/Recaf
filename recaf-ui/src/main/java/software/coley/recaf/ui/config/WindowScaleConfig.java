@@ -27,7 +27,7 @@ public class WindowScaleConfig extends BasicConfigContainer {
 		addValue(new BasicConfigValue<>("scale", double.class, scale));
 
 		componentManager.register(this, "scale", false, (container, value) -> {
-			slider = new Slider(0.5, 2.0, getScale());
+			slider = new Slider(0.5, 4.0, getScale());
 			slider.setSnapToTicks(true);
 			slider.setShowTickLabels(true);
 			slider.setBlockIncrement(0.5);
@@ -42,6 +42,6 @@ public class WindowScaleConfig extends BasicConfigContainer {
 	 * @return Window scale.
 	 */
 	public double getScale() {
-		return Math.clamp(scale.getValue(), 0.5, 2);
+		return Math.clamp(scale.getValue(), 0.5, 4);
 	}
 }
