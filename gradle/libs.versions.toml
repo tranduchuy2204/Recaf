@@ -2,50 +2,53 @@
 acc-agent = "1.0.4"
 assertj = "3.27.3"
 asm = "9.8"
-atlantafx = "2.0.1"
+atlantafx = "2.1.0"
 binary-resources = "31.3.0-alpha01.8"
 cafedude = "2.6.5"
 cdi-api = "4.1.0"
 cdi-impl = "6.0.2.Final"
 cfr = "0.152"
 dex-translator = "1.1.1"
-diffutils = "4.15"
-docking = "0.9.5"
+diffutils = "4.16"
+docking = "0.10.1"
 downgrader = "1.1.2"
 extra-collections = "1.6.0"
 extra-observables = "1.3.0"
-gson = "2.11.0"
-ikonli = "12.3.1"
-image-io-ext = "3.0.2" # newer release breaks ico plugin
+gson = "2.13.1"
+ikonli = "12.4.0"
+image-io-ext = { strictly = "3.0.2" } # newer release breaks ico plugin
 image-io-ext-ico = "3.0.2"
 instrument-server = "1.5.0"
 jackson = "2.18.2"
 jakarta-annotation = "3.0.0"
 jasm = "c5a2c90503"
-jlinker = "1.0.7"
+jelf = "0.10.0"
+jlinker = "1.0.7" # We could update, but I don't feel like rewriting the callgraph
 jphantom = "1.4.4"
-junit = "5.11.4"
-jsvg = "1.6.1"
+junit = "5.13.4"
+junit-launch = "1.13.4"
+jsvg = "2.0.0"
 lljzip = "2.8.1"
 logback-classic = { strictly = "1.4.11" } # newer releases break in jar releases
 mapping-io = "0.7.0"
-mockito = "5.15.2"
+mockito = "5.19.0"
 natural-order = "1.1"
-picocli = "4.7.6"
+picocli = "4.7.7"
+pe = "2.2.3"
 procyon = "0.6.0"
 reactfx = { strictly = "2.0-M5" } # won't get updates, dead
-regex = "0.1.16"
+regex = "0.1.19"
 # richtextfx = "0.11.3"
 richtextfx = "970ff0ed13"
 treemapfx = "1.1.0"
-vineflower = "1.10.1"
+vineflower = "1.11.1"
 sourcesolver = "1.1.5"
 # Plugins
-benmanes-versions = "0.42.0"
+benmanes-versions = "0.52.0"
 gradle-coverage-report-aggregator = "1.3.2"
-gradle-checker-processor = "2.0.2"
+gradle-checker-processor = "2.0.4"
 javafx-plugin = "0.1.0"
-shadow = "8.3.5"
+shadow = "9.1.0"
 peterabeles-gversion = "1.10.3"
 
 [libraries]
@@ -99,6 +102,8 @@ jakarta-annotation = { module = "jakarta.annotation:jakarta.annotation-api", ver
 jasm-composistion-jvm = { module = "com.github.jumanji144.Jasm:jasm-composition-jvm", version.ref = "jasm" }
 jasm-core = { module = "com.github.jumanji144.Jasm:jasm-core", version.ref = "jasm" }
 
+jelf = { module = "net.fornwall:jelf", version.ref = "jelf" }
+
 jlinker = { module = "com.github.xxDark:jlinker", version.ref = "jlinker" }
 
 jphantom = { module = "com.github.Col-E:jphantom", version.ref = "jphantom" }
@@ -106,6 +111,7 @@ jphantom = { module = "com.github.Col-E:jphantom", version.ref = "jphantom" }
 junit-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
 junit-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 junit-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-launch" }
 
 jsvg = { module = "com.github.weisj:jsvg", version.ref = "jsvg" }
 
@@ -120,6 +126,8 @@ mockito = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 natural-order = { module = "net.grey-panther:natural-comparator", version.ref = "natural-order" }
 
 picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
+
+pe = { module = "com.github.cademtz:JavaPeParser", version.ref = "pe" }
 
 procyon = { module = "org.bitbucket.mstrobel:procyon-compilertools", version.ref = "procyon" }
 

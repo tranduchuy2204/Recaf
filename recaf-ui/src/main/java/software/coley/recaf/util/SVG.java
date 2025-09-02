@@ -1,19 +1,22 @@
 package software.coley.recaf.util;
 
 import com.github.weisj.jsvg.SVGDocument;
+import com.github.weisj.jsvg.parser.LoaderContext;
 import com.github.weisj.jsvg.parser.SVGLoader;
 import jakarta.annotation.Nonnull;
 import jakarta.annotation.Nullable;
 import javafx.scene.Node;
-import javafx.scene.image.*;
+import javafx.scene.image.ImageView;
 import software.coley.recaf.ui.control.IconView;
 
-import java.awt.*;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -31,9 +34,7 @@ public class SVG {
 	private static final Map<String, SVGDocument> DOCUMENT_CACHE = new ConcurrentHashMap<>();
 
 	static {
-		EMPTY_DOCUMENT = new SVGLoader()
-				.load(new ByteArrayInputStream(("<svg width=\"0\" height=\"0\" xmlns=\"http://www.w3.org/2000/svg\">" +
-						"</svg>").getBytes(StandardCharsets.UTF_8)));
+		EMPTY_DOCUMENT = read(new ByteArrayInputStream(("<svg width=\"0\" height=\"0\" xmlns=\"http://www.w3.org/2000/svg\"></svg>").getBytes(StandardCharsets.UTF_8)));
 	}
 
 	/**
@@ -108,14 +109,7 @@ public class SVG {
 	@Nonnull
 	public static Node ofFile(@Nonnull String path, int width, int height,
 	                          @Nullable Map<RenderingHints.Key, Object> renderingHints) {
-		SVGDocument document = DOCUMENT_CACHE.computeIfAbsent(path, p -> {
-			try (InputStream is = ResourceUtil.resource(path)) {
-				SVGLoader loader = new SVGLoader();
-				return loader.load(is);
-			} catch (Exception ex) {
-				return EMPTY_DOCUMENT;
-			}
-		});
+		SVGDocument document = DOCUMENT_CACHE.computeIfAbsent(path, SVG::read);
 
 		// Render to image
 		BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
@@ -127,5 +121,24 @@ public class SVG {
 
 		// Convert to FX compatible image
 		return new ImageView(Icons.convertToFxImage(image));
+	}
+
+	@Nonnull
+	private static SVGDocument read(@Nonnull String path) {
+		try (InputStream is = ResourceUtil.resource(path)) {
+			return read(is);
+		} catch (Exception ex) {
+			return EMPTY_DOCUMENT;
+		}
+	}
+
+	@Nonnull
+	private static SVGDocument read(@Nullable InputStream is) {
+		if (is == null)
+			throw new IllegalStateException("No input stream for SVG input content");
+		// In case this bugs out again when building with Java 24+, just use reflection to call 'load'
+		// See: https://github.com/Col-E/Recaf/issues/933
+		SVGDocument document = new SVGLoader().load(is, null, LoaderContext.createDefault());
+		return Objects.requireNonNull(document, "Load failed to yield SVG document instance");
 	}
 }
