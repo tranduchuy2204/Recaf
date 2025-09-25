@@ -315,12 +315,6 @@ dialog.error.attach.content=エラーの内容:
 ##### Panels
 ## Welcome
 welcome.title=ようこそ
-welcome.discord.title=Discord に参加する
-welcome.discord.description=Recaf には，より早いペースの議論や様々なプログラミングの話題のための Discord サーバがあります。
-welcome.documentation.title=ドキュメント
-welcome.documentation.description=ドキュメントを読んで Recaf のさまざまな機能の使い方を学びましょう。
-welcome.github.title=Recaf on GitHub
-welcome.github.description=ソース・コードや未解決の問題などについては Recaf の GitHub リポジトリで確認できます。
 
 ## Workspace
 workspace.title=ワークスペース
@@ -349,7 +343,7 @@ modifications.title=変更の一覧
 
 ## Java area
 java.decompiling=クラスを逆コンパイルしています…
-java.unparsable=OpenRewrite はソース・コードの解釈に失敗しました。コンテキスト・アクションは「フィールドとメソッド」細部タブでのみ確認できます。
+java.unparsable=SourceSolver はソース・コードの解釈に失敗しました。コンテキスト・アクションは「フィールドとメソッド」細部タブでのみ確認できます。
 java.parse-state.error=解析エラー
 java.parse-state.error-details=解析に失敗したため，右クリックのコンテキスト・アクションは使用できません。\n代わりに「フィールドとメソッド」細部タブを確認できます。
 java.parse-state.initial=解析しています…

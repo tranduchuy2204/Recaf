@@ -193,12 +193,24 @@ public class JvmTransformerContext {
 	public ReAnalyzer newAnalyzer(@Nonnull InheritanceGraph inheritanceGraph,
 	                              @Nonnull ClassNode cls,
 	                              @Nonnull MethodNode method) {
+		ReInterpreter interpreter = newInterpreter(inheritanceGraph);
+		return new ReAnalyzer(interpreter);
+	}
+
+	/**
+	 * @param inheritanceGraph
+	 * 		Inheritance graph of workspace.
+	 *
+	 * @return An interpreter for handling instruction execution.
+	 */
+	@Nonnull
+	public ReInterpreter newInterpreter(@Nonnull InheritanceGraph inheritanceGraph) {
 		ReInterpreter interpreter = new ReInterpreter(inheritanceGraph);
 		interpreter.setGetFieldLookup(getFieldLookupSupplier.get());
 		interpreter.setGetStaticLookup(getStaticLookupSupplier.get());
 		interpreter.setInvokeVirtualLookup(invokeVirtualLookupSupplier.get());
 		interpreter.setInvokeStaticLookup(invokeStaticLookupSupplier.get());
-		return new ReAnalyzer(interpreter);
+		return interpreter;
 	}
 
 	/**
@@ -219,6 +231,19 @@ public class JvmTransformerContext {
 	 */
 	public boolean pruneDeadCode(@Nonnull ClassNode declaringClass, @Nonnull MethodNode method) throws TransformationException {
 		return getJvmTransformer(DeadCodeRemovingTransformer.class).prune(declaringClass, method);
+	}
+
+	/**
+	 * @param bundle
+	 * 		Bundle containing the class.
+	 * @param info
+	 * 		The class's model in the workspace.
+	 *
+	 * @return {@code true} when the context currently has the class represented as a node <i>(vs raw {@code byte[]})</i.>
+	 */
+	public boolean isNode(@Nonnull JvmClassBundle bundle, @Nonnull JvmClassInfo info) {
+		JvmClassData data = getJvmClassData(bundle, info);
+		return data.node != null;
 	}
 
 	/**

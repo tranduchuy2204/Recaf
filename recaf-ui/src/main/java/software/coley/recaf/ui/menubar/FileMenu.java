@@ -13,7 +13,6 @@ import javafx.stage.Stage;
 import org.kordamp.ikonli.carbonicons.CarbonIcons;
 import org.slf4j.Logger;
 import software.coley.recaf.analytics.logging.Logging;
-import software.coley.recaf.services.navigation.Actions;
 import software.coley.recaf.services.window.WindowManager;
 import software.coley.recaf.services.workspace.WorkspaceManager;
 import software.coley.recaf.ui.config.RecentFilesConfig;
@@ -22,7 +21,6 @@ import software.coley.recaf.ui.control.FontIconView;
 import software.coley.recaf.ui.control.popup.OpenUrlPopup;
 import software.coley.recaf.ui.docking.DockingManager;
 import software.coley.recaf.ui.pane.WorkspaceBuilderPane;
-import software.coley.recaf.ui.pane.WorkspaceInformationPane;
 import software.coley.recaf.ui.window.RecafScene;
 import software.coley.recaf.ui.window.RecafStage;
 import software.coley.recaf.util.ErrorDialogs;
@@ -55,11 +53,8 @@ public class FileMenu extends WorkspaceAwareMenu {
 	private final WorkspaceManager workspaceManager;
 	private final PathLoadingManager pathLoadingManager;
 	private final PathExportingManager pathExportingManager;
-	private final Instance<WorkspaceInformationPane> infoPaneProvider;
 	private final Instance<OpenUrlPopup> openUrlProvider;
-	private final DockingManager dockingManager;
 	private final WindowManager windowManager;
-	private final Actions actions;
 	// config
 	private final RecentFilesConfig recentFilesConfig;
 
@@ -67,21 +62,16 @@ public class FileMenu extends WorkspaceAwareMenu {
 	public FileMenu(@Nonnull WorkspaceManager workspaceManager,
 	                @Nonnull PathLoadingManager pathLoadingManager,
 	                @Nonnull PathExportingManager pathExportingManager,
-	                @Nonnull Instance<WorkspaceInformationPane> infoPaneProvider,
 	                @Nonnull Instance<OpenUrlPopup> openUrlProvider,
 	                @Nonnull DockingManager dockingManager,
 	                @Nonnull WindowManager windowManager,
-	                @Nonnull Actions actions,
 	                @Nonnull RecentFilesConfig recentFilesConfig) {
 		super(workspaceManager);
 		this.workspaceManager = workspaceManager;
 		this.pathLoadingManager = pathLoadingManager;
 		this.pathExportingManager = pathExportingManager;
-		this.infoPaneProvider = infoPaneProvider;
 		this.openUrlProvider = openUrlProvider;
-		this.dockingManager = dockingManager;
 		this.windowManager = windowManager;
-		this.actions = actions;
 		this.recentFilesConfig = recentFilesConfig;
 
 		textProperty().bind(getBinding("menu.file"));
@@ -150,6 +140,15 @@ public class FileMenu extends WorkspaceAwareMenu {
 				String extension = IOUtil.getExtension(model.primary().path());
 				Node graphic = Icons.getIconView(Icons.getIconPathForFileExtension(extension));
 				menuRecent.getItems().add(new ClosableActionMenuItem(title, graphic, () -> {
+					// If the model can no longer be loaded remove it.
+					if (!model.canLoadWorkspace()) {
+						Toolkit.getDefaultToolkit().beep();
+						remove.run();
+						logger.warn("Recent workspace for '{}' cannot be found", title);
+						refreshRecent();
+						return;
+					}
+
 					// Get paths from model
 					Path primaryPath = Paths.get(model.primary().path());
 					List<Path> supportingPaths = model.libraries().stream()
@@ -160,6 +159,7 @@ public class FileMenu extends WorkspaceAwareMenu {
 					pathLoadingManager.asyncNewWorkspace(primaryPath, supportingPaths, ex -> {
 						Toolkit.getDefaultToolkit().beep();
 						recentWorkspaces.remove(model);
+						refreshRecent();
 						logger.error("Failed to open recent workspace for '{}'", title, ex);
 						ErrorDialogs.show(
 								getBinding("dialog.error.loadworkspace.title"),

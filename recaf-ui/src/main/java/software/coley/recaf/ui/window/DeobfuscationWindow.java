@@ -44,11 +44,13 @@ import software.coley.recaf.services.assembler.AssemblerPipelineManager;
 import software.coley.recaf.services.assembler.JvmAssemblerPipeline;
 import software.coley.recaf.services.cell.CellConfigurationService;
 import software.coley.recaf.services.decompile.DecompilerManager;
+import software.coley.recaf.services.deobfuscation.transform.generic.CallResultInliningTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.CycleClassRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.DeadCodeRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.DuplicateAnnotationRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.DuplicateCatchMergingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.EnumNameRestorationTransformer;
+import software.coley.recaf.services.deobfuscation.transform.generic.FrameRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.GotoInliningTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.IllegalAnnotationRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.IllegalSignatureRemovingTransformer;
@@ -61,6 +63,7 @@ import software.coley.recaf.services.deobfuscation.transform.generic.OpaquePredi
 import software.coley.recaf.services.deobfuscation.transform.generic.RedundantTryCatchRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.SourceNameRestorationTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.StaticValueInliningTransformer;
+import software.coley.recaf.services.deobfuscation.transform.generic.UnknownAttributeRemovingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.VariableFoldingTransformer;
 import software.coley.recaf.services.deobfuscation.transform.generic.VariableTableNormalizingTransformer;
 import software.coley.recaf.services.info.association.FileTypeSyntaxAssociationService;
@@ -149,12 +152,15 @@ public class DeobfuscationWindow extends RecafStage {
 					DuplicateAnnotationRemovingTransformer.class,
 					LongAnnotationRemovingTransformer.class,
 					LongExceptionRemovingTransformer.class,
+					FrameRemovingTransformer.class,
 					IllegalAnnotationRemovingTransformer.class,
 					IllegalSignatureRemovingTransformer.class,
-					IllegalVarargsRemovingTransformer.class
+					IllegalVarargsRemovingTransformer.class,
+					UnknownAttributeRemovingTransformer.class
 			));
 			TreeItem<Selection> optimize = new TreeItem<>(new Selection.Category("deobf.tree.generic.optimize", CarbonIcons.CLEAN));
 			optimize.getChildren().addAll(of(
+					CallResultInliningTransformer.class,
 					DeadCodeRemovingTransformer.class,
 					DuplicateCatchMergingTransformer.class,
 					GotoInliningTransformer.class,
