@@ -25,9 +25,12 @@ import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * ASM instruction utilities.
@@ -393,7 +396,9 @@ public class AsmInsnUtil implements Opcodes {
 	 *
 	 * @return {@code true} when it is a return operation.
 	 */
-	public static boolean isReturn(@Nonnull AbstractInsnNode insn) {
+	public static boolean isReturn(@Nullable AbstractInsnNode insn) {
+		if (insn == null)
+			return false;
 		return isReturn(insn.getOpcode());
 	}
 
@@ -414,9 +419,23 @@ public class AsmInsnUtil implements Opcodes {
 	 * @param insn
 	 * 		Instruction to check.
 	 *
+	 * @return {@code true} when it is a label.
+	 */
+	public static boolean isLabel(@Nullable AbstractInsnNode insn) {
+		if (insn == null)
+			return false;
+		return insn.getType() == AbstractInsnNode.LABEL;
+	}
+
+	/**
+	 * @param insn
+	 * 		Instruction to check.
+	 *
 	 * @return {@code true} if the instruction modifies the control flow.
 	 */
-	public static boolean isFlowControl(@Nonnull AbstractInsnNode insn) {
+	public static boolean isFlowControl(@Nullable AbstractInsnNode insn) {
+		if (insn == null)
+			return false;
 		int type = insn.getType();
 		return type == AbstractInsnNode.JUMP_INSN ||
 				type == AbstractInsnNode.TABLESWITCH_INSN ||
@@ -635,6 +654,15 @@ public class AsmInsnUtil implements Opcodes {
 	 * {@code false} when the given block is never explicitly flowed into via control flow instructions.
 	 */
 	public static boolean hasInboundFlowReferences(@Nonnull MethodNode method, @Nonnull List<AbstractInsnNode> block) {
+		Set<LabelNode> labels = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (AbstractInsnNode insn : block)
+			if (insn.getType() == AbstractInsnNode.LABEL)
+				labels.add((LabelNode) insn);
+
+		// If the block has no labels, then there cannot be any inbound references.
+		if (labels.isEmpty())
+			return false;
+
 		// No control flow instruction should point to this block *at all*.
 		for (AbstractInsnNode insn : method.instructions) {
 			// Skip instructions in the given block.
@@ -645,17 +673,17 @@ public class AsmInsnUtil implements Opcodes {
 			if (insn instanceof JumpInsnNode jump && block.contains(jump.label))
 				return true;
 			if (insn instanceof TableSwitchInsnNode tswitch) {
-				if (block.contains(tswitch.dflt))
+				if (labels.contains(tswitch.dflt))
 					return true;
 				for (LabelNode label : tswitch.labels)
-					if (block.contains(label))
+					if (labels.contains(label))
 						return true;
 			}
 			if (insn instanceof LookupSwitchInsnNode lswitch) {
-				if (block.contains(lswitch.dflt))
+				if (labels.contains(lswitch.dflt))
 					return true;
 				for (LabelNode label : lswitch.labels)
-					if (block.contains(label))
+					if (labels.contains(label))
 						return true;
 			}
 		}

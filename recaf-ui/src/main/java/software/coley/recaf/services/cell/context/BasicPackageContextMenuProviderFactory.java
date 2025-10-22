@@ -2,8 +2,10 @@ package software.coley.recaf.services.cell.context;
 
 import jakarta.annotation.Nonnull;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import javafx.scene.control.ContextMenu;
+import javafx.stage.WindowEvent;
 import software.coley.recaf.info.ClassInfo;
 import software.coley.recaf.services.cell.icon.IconProvider;
 import software.coley.recaf.services.cell.icon.IconProviderService;
@@ -12,6 +14,7 @@ import software.coley.recaf.services.cell.text.TextProviderService;
 import software.coley.recaf.services.navigation.Actions;
 import software.coley.recaf.services.search.match.StringPredicateProvider;
 import software.coley.recaf.ui.contextmenu.ContextMenuBuilder;
+import software.coley.recaf.ui.control.popup.DecompileAllPopup;
 import software.coley.recaf.ui.pane.search.ClassReferenceSearchPane;
 import software.coley.recaf.ui.pane.search.MemberReferenceSearchPane;
 import software.coley.recaf.util.ClipboardUtil;
@@ -30,11 +33,15 @@ import static org.kordamp.ikonli.carbonicons.CarbonIcons.*;
 @ApplicationScoped
 public class BasicPackageContextMenuProviderFactory extends AbstractContextMenuProviderFactory
 		implements PackageContextMenuProviderFactory {
+	private final Instance<DecompileAllPopup> decompileAllPaneProvider;
+
 	@Inject
-	public BasicPackageContextMenuProviderFactory(@Nonnull TextProviderService textService,
+	public BasicPackageContextMenuProviderFactory(@Nonnull Instance<DecompileAllPopup> decompileAllPaneProvider,
+	                                              @Nonnull TextProviderService textService,
 	                                              @Nonnull IconProviderService iconService,
 	                                              @Nonnull Actions actions) {
 		super(textService, iconService, actions);
+		this.decompileAllPaneProvider = decompileAllPaneProvider;
 	}
 
 	@Nonnull
@@ -79,6 +86,17 @@ public class BasicPackageContextMenuProviderFactory extends AbstractContextMenuP
 				pane.typePredicateIdProperty().setValue(StringPredicateProvider.KEY_STARTS_WITH);
 				pane.typeValueProperty().setValue(packageName + "/");
 			});
+
+			// Misc
+			if (bundle instanceof JvmClassBundle jvmBundle) {
+				builder.item("menu.file.decompileall", DOCUMENT_EXPORT, () -> {
+					DecompileAllPopup popup = decompileAllPaneProvider.get();
+					popup.addEventFilter(WindowEvent.WINDOW_HIDDEN, e -> decompileAllPaneProvider.destroy(popup));
+					popup.setTargetBundle(jvmBundle);
+					popup.setNamePredicate(name -> name.startsWith(packageName));
+					popup.show();
+				});
+			}
 
 			// Copy path
 			builder.item("menu.tab.copypath", COPY_LINK, () -> ClipboardUtil.copyString(packageName));

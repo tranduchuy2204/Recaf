@@ -113,6 +113,29 @@ public class ReEvaluator {
 	}
 
 	/**
+	 * @param instructionBlock
+	 * 		Block of instructions to evaluate.
+	 * 		This may be an incomplete expression with no {@code return} instruction.
+	 * 		In such cases, the resulting stack top value will be returned.
+	 * @param originFrame
+	 * 		The origin frame to initiate evaluation state from.
+	 * @param methodAccess
+	 * 		The access flags of the method defining the given instruction block.
+	 *
+	 * @return {@code true} when all instructions in the given list can be evaluated.
+	 */
+	public boolean canEvaluateBlock(@Nonnull InsnList instructionBlock,
+	                                @Nonnull ReFrame originFrame,
+	                                int methodAccess) {
+		// Must not have any unsupported instructions
+		ExecutingFrame frame = new ExecutingFrame(0xFF, 0xFF, methodAccess);
+		for (AbstractInsnNode instruction : instructionBlock)
+			if (!frame.canEvaluate(instruction, interpreter))
+				return false;
+		return true;
+	}
+
+	/**
 	 * @param className
 	 * 		Name of class defining the target method.
 	 * @param methodName
@@ -215,10 +238,63 @@ public class ReEvaluator {
 					return frame.returnValue;
 			} catch (AnalyzerException e) {
 				throw new ReEvaluationException(e, "Failed executing instruction: " + BlwUtil.toString(pc));
+			} catch (NoNextException e) {
+				throw new ReEvaluationException(e, "Execution falls through end");
 			}
 			it--;
 		}
 		throw new ReEvaluationException("Method did not yield an value in " + maxSteps + " steps");
+	}
+
+	/**
+	 * @param instructionBlock
+	 * 		Block of instructions to evaluate.
+	 * 		This may be an incomplete expression with no {@code return} instruction.
+	 * 		In such cases, the resulting stack top value will be returned.
+	 * @param originFrame
+	 * 		The origin frame to initiate evaluation state from.
+	 * @param methodAccess
+	 * 		The access flags of the method defining the given instruction block.
+	 *
+	 * @return Return value of the instruction block, or stack top value at the end of execution.
+	 *
+	 * @throws ReEvaluationException
+	 * 		When the target block could not be evaluated.
+	 */
+	@Nonnull
+	public ReValue evaluateBlock(@Nonnull InsnList instructionBlock,
+	                             @Nonnull ReFrame originFrame,
+	                             int methodAccess) throws ReEvaluationException {
+		// Must support evaluation
+		if (!canEvaluateBlock(instructionBlock, originFrame, methodAccess))
+			throw new ReEvaluationException("Target block does not support evaluation");
+
+		// Create initial frame
+		ExecutingFrame frame = new ExecutingFrame(originFrame.getLocals(), originFrame.getMaxStackSize(), methodAccess);
+		for (int i = 0; i < originFrame.getLocals(); i++)
+			frame.setLocal(i, originFrame.getLocal(i));
+
+		// Handle execution
+		AbstractInsnNode pc = instructionBlock.getFirst();
+		int it = maxSteps;
+		while (it > 0) {
+			try {
+				pc = frame.evaluate(pc, interpreter);
+
+				// Check if return instruction assigned a value.
+				if (frame.returnValue != null)
+					return frame.returnValue;
+			} catch (AnalyzerException e) {
+				throw new ReEvaluationException(e, "Failed executing instruction: " + BlwUtil.toString(pc));
+			} catch (NoNextException e) {
+				// If there is no next instruction from the given block, then control flow has exited the block.
+				// The intended use case for this is to be given incomplete segments of code and see what's on the
+				// top at the end, so we will yield that here.
+				return frame.getStack(frame.getStackSize() - 1);
+			}
+			it--;
+		}
+		throw new ReEvaluationException("Block did not yield an value in " + maxSteps + " steps");
 	}
 
 	/**
@@ -230,8 +306,12 @@ public class ReEvaluator {
 		private final boolean isStatic;
 
 		public ExecutingFrame(@Nonnull MethodNode method) {
-			super(method.maxLocals, method.maxStack);
-			isStatic = AccessFlag.isStatic(method.access);
+			this(method.maxLocals, method.maxStack, method.access);
+		}
+
+		public ExecutingFrame(int maxLocals, int maxStack, int access) {
+			super(null, maxLocals, maxStack);
+			isStatic = AccessFlag.isStatic(access);
 		}
 
 		/**
@@ -293,10 +373,12 @@ public class ReEvaluator {
 		 *
 		 * @throws AnalyzerException
 		 * 		When the instruction cannot be evaluated.
+		 * @throws NoNextException
+		 * 		When there is no next instruction to execute.
 		 */
 		@Nonnull
-		public AbstractInsnNode evaluate(@Nonnull AbstractInsnNode insn, @Nonnull ReInterpreter interpreter) throws AnalyzerException {
-			return switch (insn.getOpcode()) {
+		public AbstractInsnNode evaluate(@Nonnull AbstractInsnNode insn, @Nonnull ReInterpreter interpreter) throws AnalyzerException, NoNextException {
+			AbstractInsnNode next = switch (insn.getOpcode()) {
 				case GOTO -> ((JumpInsnNode) insn).label;
 				case IFEQ -> conditional(insn, i -> i.isEqualTo(0));
 				case IFNE -> conditional(insn, i -> i.isNotEqualTo(0));
@@ -397,6 +479,9 @@ public class ReEvaluator {
 					yield insn.getNext();
 				}
 			};
+			if (next == null)
+				throw NoNextException.INSTANCE;
+			return next;
 		}
 
 		@Nonnull
@@ -424,6 +509,19 @@ public class ReEvaluator {
 		@Nonnull
 		public ReValue peek(int offset) {
 			return getStack(getStackSize() - 1 - offset);
+		}
+	}
+
+	/** Dummy exception to signal out-of-bounds flow in the evaluate methos. */
+	private static class NoNextException extends Exception {
+		private static final NoNextException INSTANCE = new NoNextException();
+
+		private NoNextException() {}
+
+		@Override
+		public synchronized Throwable fillInStackTrace() {
+			// Don't care.
+			return this;
 		}
 	}
 }

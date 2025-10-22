@@ -6,11 +6,14 @@ import jakarta.enterprise.context.Dependent;
 import jakarta.inject.Inject;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Frame;
 import software.coley.collections.Lists;
 import software.coley.recaf.info.JvmClassInfo;
@@ -20,8 +23,10 @@ import software.coley.recaf.services.transform.ClassTransformer;
 import software.coley.recaf.services.transform.JvmClassTransformer;
 import software.coley.recaf.services.transform.JvmTransformerContext;
 import software.coley.recaf.services.transform.TransformationException;
-import software.coley.recaf.util.AsmInsnUtil;
 import software.coley.recaf.util.BlwUtil;
+import software.coley.recaf.util.analysis.ReEvaluationException;
+import software.coley.recaf.util.analysis.ReEvaluator;
+import software.coley.recaf.util.analysis.ReFrame;
 import software.coley.recaf.util.analysis.value.DoubleValue;
 import software.coley.recaf.util.analysis.value.FloatValue;
 import software.coley.recaf.util.analysis.value.IntValue;
@@ -35,12 +40,16 @@ import software.coley.recaf.workspace.model.resource.WorkspaceResource;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.objectweb.asm.Opcodes.*;
+import static software.coley.recaf.util.AsmInsnUtil.*;
+
 
 /**
  * A transformer that folds sequences of computed values into constants.
@@ -321,6 +330,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 	private boolean pass2SequenceFolding(@Nonnull JvmTransformerContext context, @Nonnull ClassNode node,
 	                                     @Nonnull MethodNode method, @Nonnull InsnList instructions) throws TransformationException {
 		boolean dirty = false;
+		List<AbstractInsnNode> sequence = new ArrayList<>();
 		Frame<ReValue>[] frames = context.analyze(inheritanceGraph, node, method);
 		int endIndex = instructions.size() - 1;
 		for (int i = 1; i < endIndex; i++) {
@@ -328,12 +338,12 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 			int opcode = instruction.getOpcode();
 
 			// Iterate until we find an instruction that consumes values off the stack as part of an "operation".
-			int sizeConsumed = AsmInsnUtil.getSizeConsumed(instruction);
+			int sizeConsumed = getSizeConsumed(instruction);
 			if (sizeConsumed == 0 || (opcode >= POP && opcode <= DUP2_X2))
 				continue;
 
 			// Return instructions consume values off the stack but unlike operations do not produce an outcome.
-			boolean isReturn = AsmInsnUtil.isReturn(opcode) && opcode != RETURN;
+			boolean isReturn = isReturn(opcode) && opcode != RETURN;
 
 			// Grab the current and next frame for later. We want to pull values from these to determine
 			// if operations on constant inputs can be inlined.
@@ -350,24 +360,45 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 			boolean validSequence = true;
 			int netStackChange = 0;
 			int j = i;
-			List<AbstractInsnNode> sequence = new ArrayList<>();
+			sequence.clear();
+			Map<Integer, ReValue> sequenceVarWrites = new HashMap<>();
 			while (j >= 0) {
 				AbstractInsnNode insn = instructions.get(j);
 				int insnOp = insn.getOpcode();
 				if (insnOp != NOP && insnOp != -1) // Skip adding NOP/Labels
-					sequence.addFirst(insn);
+					sequence.add(insn);
 
 				// Abort if we observe control flow. Both outbound and inbound breaks sequences.
 				// If there is obfuscated control flow that is redundant use a control flow flattening transformer first.
-				if (AsmInsnUtil.isFlowControl(insn) || AsmInsnUtil.hasInboundFlowReferences(method, Collections.singletonList(insn))) {
+				if (isFlowControl(insn)) {
+					validSequence = false;
+					break;
+				}
+				if (insn.getType() == AbstractInsnNode.LABEL && hasInboundFlowReferences(method, Collections.singletonList(insn))) {
 					validSequence = false;
 					break;
 				}
 
+				// Record variable side effects.
+				// Because j steps backwards the first encountered write will be the only thing we need to ensure
+				// is kept after folding the sequence.
+				Frame<ReValue> jframe = frames[j];
+				if (isVarStore(insnOp) && insn instanceof VarInsnNode vin) {
+					int index = vin.var;
+					ReValue stack = frame.getStack(frame.getStackSize() - 1);
+					if (!stack.hasKnownValue())
+						break;
+					sequenceVarWrites.putIfAbsent(index, stack);
+				} else if (insn instanceof IincInsnNode iinc) {
+					int index = iinc.var;
+					ReValue local = frame.getLocal(index);
+					if (!local.hasKnownValue() || !(local instanceof IntValue intLocal))
+						break;
+					sequenceVarWrites.putIfAbsent(index, intLocal.add(iinc.incr));
+				}
+
 				// Update the net stack size change.
-				int consumed = AsmInsnUtil.getSizeConsumed(insn);
-				int produced = AsmInsnUtil.getSizeProduced(insn);
-				int stackDiff = produced - consumed;
+				int stackDiff = computeInstructionStackDifference(frames, j, insn);
 				netStackChange += stackDiff;
 
 				// Step backwards.
@@ -377,6 +408,9 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 				if (netStackChange >= 1)
 					break;
 			}
+
+			// Doing 'List.add' + 'reverse' is faster than 'List.addFirst' on large inputs.
+			Collections.reverse(sequence);
 
 			// Skip if the completed sequence isn't a viable candidate for folding.
 			// - Explicitly marked as invalid
@@ -391,91 +425,215 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 				continue;
 
 			// Keep the return instruction in the sequence.
-			if (isReturn && AsmInsnUtil.isReturn(sequence.getLast()))
+			if (isReturn && isReturn(sequence.getLast())) {
 				sequence.removeLast();
+
+				// Removing the return can put us under the limit. In this case, there is nothing to fold.
+				// There is just a value and then the return.
+				if (sequence.size() < 2)
+					continue;
+			}
 
 			// Replace the operation with a constant value, or simplified instruction pattern.
 			ReValue topValue = isReturn ?
 					frame.getStack(frame.getStackSize() - 1) :
 					nextFrame.getStack(nextFrame.getStackSize() - 1);
+
+			// In some cases where the next instruction is a label targeted by backwards jumps from dummy/dead code
+			// the analyzer can get fooled into merging an unknown state into something that should be known.
+			// When this happens we can evaluate our sequence and see what the result should be.
+			if (!isReturn && !topValue.hasKnownValue() && isLabel(sequence.getLast().getNext()))
+				topValue = evaluateTopFromSequence(context, method, sequence, topValue, frames, j);
+
+			// Handle replacing the sequence.
 			AbstractInsnNode replacement = toInsn(topValue);
-			if (replacement == null) {
-				// Skip if this isn't an operation we can support
-				 if (frame.getStackSize() < 2)
-				 	continue;
+			if (replacement != null) {
+				// If we have a replacement, remove all instructions in the sequence and replace the
+				// operation instruction with one that pushes a constant value of the result in its place.
+				for (AbstractInsnNode item : sequence)
+					instructions.set(item, new InsnNode(NOP));
+				if (isReturn) {
+					// We know the sequence size must be >= 2, so the instruction before
+					// the return should have been replaced with a nop, and is safe to replace
+					// with our constant.
+					AbstractInsnNode old = instructions.get(i - 1);
+					instructions.set(old, replacement);
+				} else {
+					instructions.set(instructions.get(i), replacement);
 
-				// We don't know the result of the operation. But if it is something we know is redundant
-				// we will want to remove it anyways. For instance:
-				//  x * 1 = x
-				//  x + 0 = x
-				//  x | 0 = x
-				//  x & -1 = x
-				//  x ^ 0 = x
-				//  x << 0 = x
-				//  x >> 0 = x
-				//  x >>> 0 = x
-				ReValue top = frame.getStack(frame.getStackSize() - 1);
-				ReValue topM1 = frame.getStack(frame.getStackSize() - 2);
-				int targetValue = switch (opcode) {
-					case IAND, LAND -> -1;
-					case IMUL, FMUL, DMUL, LMUL -> 1;
-					case IADD, FADD, DADD, LADD,
-							IOR, LOR,
-							IXOR, LXOR,
-							ISHL, ISHR, IUSHR, LSHL, LSHR, LUSHR -> 0;
-					default -> 25565;
-				};
-
-				// Skip if not an operation we can simplify.
-				if (targetValue == 25565)
-					continue;
-
-				if (ReValue.isPrimitiveEqualTo(top, targetValue)) {
-					// Scan for the instructions that provide the argument values for the current instruction/binary operation.
-					// - Start with the instruction before this one as a potential provider for the 2nd argument (right value in an operation)
-					BinaryOperationArguments arguments = getBinaryOperationArguments(instruction.getPrevious(), opcode);
-					if (arguments == null)
-						continue;
-
-					// Remove redundant operation + top/right value provider.
-					instructions.set(instruction, new InsnNode(NOP));
-					instructions.set(arguments.argument2().insn(), new InsnNode(NOP));
-					for (AbstractInsnNode intermediate : arguments.argument2().intermediates())
-						instructions.set(intermediate, new InsnNode(NOP));
-					dirty = true;
-				} else if (ReValue.isPrimitiveEqualTo(topM1, targetValue)) {
-					// Scan for the instructions that provide the argument values for the current instruction/binary operation.
-					// - Start with the instruction before this one as a potential provider for the 2nd argument (right value in an operation)
-					BinaryOperationArguments arguments = getBinaryOperationArguments(instruction.getPrevious(), opcode);
-					if (arguments == null)
-						continue;
-
-					// Remove redundant operation + top-1/left value provider.
-					instructions.set(instruction, new InsnNode(NOP));
-					instructions.set(arguments.argument1().insn(), new InsnNode(NOP));
-					for (AbstractInsnNode intermediate : arguments.argument1().intermediates())
-						instructions.set(intermediate, new InsnNode(NOP));
-					dirty = true;
+					// Insert variable writes to ensure their states are not affected by our inlining.
+					sequenceVarWrites.forEach((index, value) -> {
+						AbstractInsnNode varReplacement = toInsn(value);
+						VarInsnNode varStore = createVarStore(index, Objects.requireNonNull(value.type(), "Missing var type"));
+						instructions.insertBefore(replacement, varReplacement);
+						instructions.insertBefore(replacement, varStore);
+					});
+					i += sequenceVarWrites.size() * 2;
 				}
-				continue;
-			}
-
-			// If we have a replacement, remove all instructions in the sequence and replace the
-			// operation instruction with one that pushes a constant value of the result in its place.
-			for (AbstractInsnNode item : sequence)
-				instructions.set(item, new InsnNode(NOP));
-			if (isReturn) {
-				// We know the sequence size must be >= 2, so the instruction before
-				// the return should have been replaced with a nop, and is safe to replace
-				// with our constant.
-				AbstractInsnNode old = instructions.get(i - 1);
-				instructions.set(old, replacement);
+				dirty = true;
 			} else {
-				instructions.set(instructions.get(i), replacement);
+				// If we don't have a replacement (since the end state cannot be resolved) see if we can at least
+				// fold redundant operations like "x = x * 1".
+				if (foldRedundantOperations(instructions, instruction, frame)) {
+					dirty = true;
+				} else {
+					i += sequence.size() - 1;
+				}
 			}
-			dirty = true;
 		}
 		return dirty;
+	}
+
+	/**
+	 * Attempts to evaluate the given sequence of instructions to find the resulting value.
+	 *
+	 * @param context
+	 * 		Transformer context.
+	 * @param method
+	 * 		Method hosting the sequence of instructions.
+	 * @param sequence
+	 * 		Sequence of instructions to evaluate.
+	 * @param topValue
+	 * 		The existing top value that has an unknown value.
+	 * @param frames
+	 * 		The method stack frames.
+	 * @param sequenceStartIndex
+	 * 		The stack frame index where the sequence begins at.
+	 *
+	 * @return Top stack value after executing the given sequence of instructions.
+	 */
+	@Nonnull
+	private ReValue evaluateTopFromSequence(@Nonnull JvmTransformerContext context,
+	                                        @Nonnull MethodNode method,
+	                                        @Nonnull List<AbstractInsnNode> sequence,
+	                                        @Nonnull ReValue topValue,
+	                                        @Nonnull Frame<ReValue>[] frames,
+	                                        int sequenceStartIndex) {
+		// Need to wrap a copy of the instructions in its own InsnList
+		// so that instructions have 'getNext()' and 'getPrevious()' set properly.
+		Map<LabelNode, LabelNode> clonedLabels = Collections.emptyMap();
+		InsnList block = new InsnList();
+		for (AbstractInsnNode insn : sequence)
+			block.add(insn.clone(clonedLabels));
+
+		// Setup evaluator. We generally only support linear folding, so having the execution step limit
+		// match the sequence length with a little leeway should be alright.
+		final int maxSteps = sequence.size() + 10;
+		ReFrame initialBlockFrame = (ReFrame) frames[Math.max(0, sequenceStartIndex)];
+		ReEvaluator evaluator = new ReEvaluator(context.getWorkspace(), context.newInterpreter(inheritanceGraph), maxSteps);
+
+		// Evaluate the sequence and return the result.
+		try {
+			ReValue result = evaluator.evaluateBlock(block, initialBlockFrame, method.access);
+			if (Objects.equals(result.type(), topValue.type())) // Sanity check
+				return result;
+		} catch (ReEvaluationException ignored) {}
+
+		// Evaluation failed, this is to be expected as some cases cannot always be evaluated.
+		return topValue;
+	}
+
+	/**
+	 * @param instructions
+	 * 		Instructions to operate on.
+	 * @param instruction
+	 * 		The instruction to check for being a redundant operation.
+	 * @param frame
+	 * 		The stackframe at the instruction position.
+	 *
+	 * @return {@code true} when the instruction was a redundant operation that has been folded. Otherwise {@code false}.
+	 */
+	private static boolean foldRedundantOperations(@Nonnull InsnList instructions, @Nonnull AbstractInsnNode instruction, @Nonnull Frame<ReValue> frame) {
+		// Skip if this isn't an operation we can support
+		if (frame.getStackSize() < 2)
+			return false;
+
+		// We don't know the result of the operation. But if it is something we know is redundant
+		// we will want to remove it anyways. For instance:
+		//  x * 1 = x
+		//  x + 0 = x
+		//  x | 0 = x
+		//  x & -1 = x
+		//  x ^ 0 = x
+		//  x << 0 = x
+		//  x >> 0 = x
+		//  x >>> 0 = x
+		ReValue top = frame.getStack(frame.getStackSize() - 1);
+		ReValue topM1 = frame.getStack(frame.getStackSize() - 2);
+		int opcode = instruction.getOpcode();
+		int targetValue = switch (opcode) {
+			case IAND, LAND -> -1;
+			case IMUL, FMUL, DMUL, LMUL -> 1;
+			case IADD, FADD, DADD, LADD,
+					IOR, LOR,
+					IXOR, LXOR,
+					ISHL, ISHR, IUSHR, LSHL, LSHR, LUSHR -> 0;
+			default -> 25565;
+		};
+
+		// Skip if not an operation we can simplify.
+		if (targetValue == 25565)
+			return false;
+
+		if (ReValue.isPrimitiveEqualTo(top, targetValue)) {
+			// Scan for the instructions that provide the argument values for the current instruction/binary operation.
+			// - Start with the instruction before this one as a potential provider for the 2nd argument (right value in an operation)
+			BinaryOperationArguments arguments = getBinaryOperationArguments(instruction.getPrevious(), opcode);
+			if (arguments == null)
+				return false;
+
+			// Remove redundant operation + top/right value provider.
+			instructions.set(instruction, new InsnNode(NOP));
+			instructions.set(arguments.argument2().insn(), new InsnNode(NOP));
+			for (AbstractInsnNode intermediate : arguments.argument2().intermediates())
+				instructions.set(intermediate, new InsnNode(NOP));
+			return true;
+		} else if (ReValue.isPrimitiveEqualTo(topM1, targetValue)) {
+			// Scan for the instructions that provide the argument values for the current instruction/binary operation.
+			// - Start with the instruction before this one as a potential provider for the 2nd argument (right value in an operation)
+			BinaryOperationArguments arguments = getBinaryOperationArguments(instruction.getPrevious(), opcode);
+			if (arguments == null)
+				return false;
+
+			// Remove redundant operation + top-1/left value provider.
+			instructions.set(instruction, new InsnNode(NOP));
+			instructions.set(arguments.argument1().insn(), new InsnNode(NOP));
+			for (AbstractInsnNode intermediate : arguments.argument1().intermediates())
+				instructions.set(intermediate, new InsnNode(NOP));
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @param frames
+	 * 		Method stack frames.
+	 * @param i
+	 * 		Index in the stack frames of the given instruction.
+	 * @param insn
+	 * 		The instruction to evaluate for stack size differences after execution.
+	 *
+	 * @return Stack size difference after execution.
+	 */
+	private static int computeInstructionStackDifference(@Nonnull Frame<ReValue>[] frames, int i, @Nonnull AbstractInsnNode insn) {
+		// Ideally we just check the size difference between this frame and the next frame.
+		// Not all frames exist in the array, as dead code gets skipped by ASM's analyzer.
+		Frame<ReValue> thisFrame = frames[i];
+		Frame<ReValue> nextFrame = frames[i + 1];
+		if (thisFrame != null && nextFrame != null) {
+			int jsize = thisFrame.getStackSize();
+			int jsizeNext = nextFrame.getStackSize();
+			return jsizeNext - jsize;
+		}
+
+		// This is our fallback. These utility methods are not ideal because they follow the JVM spec.
+		// I know, that sounds ridiculous. But ASM's analyzer treats long/double as a single slot.
+		// These size methods will treat long/double as two slots. The discrepancy can lead to us not
+		// properly evaluating sequence lengths. This generally shouldn't ever be an issue unless we're
+		// looking at dead code regions (which make the frame null checks above fail).
+		int consumed = getSizeConsumed(insn);
+		int produced = getSizeProduced(insn);
+		return produced - consumed;
 	}
 
 	/**
@@ -510,8 +668,8 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 			}
 
 			// Get stack change for this instruction in the sequence.
-			consumed = AsmInsnUtil.getSizeConsumed(seq);
-			produced = AsmInsnUtil.getSizeProduced(seq);
+			consumed = getSizeConsumed(seq);
+			produced = getSizeProduced(seq);
 
 			// If we ever see the stack size in this sequence go negative, then it
 			// cannot be treated as an "isolated" sequence. It implies that there is a reliance on a larger
@@ -553,7 +711,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 	 */
 	protected static boolean isSupportedValueProducer(@Nonnull AbstractInsnNode insn) {
 		// Skip if this instruction consumes a value off the stack.
-		if (AsmInsnUtil.getSizeConsumed(insn) > 0)
+		if (getSizeConsumed(insn) > 0)
 			return false;
 
 		// The following cases are supported:
@@ -562,7 +720,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 		//  - static field gets (context will determine if value in field is constant/known)
 		//  - static method calls with 0 args (context will determine if returned value of method is constant/known)
 		int op = insn.getOpcode();
-		if (AsmInsnUtil.isConstValue(op))
+		if (isConstValue(op))
 			return true;
 		if (op >= ILOAD && op <= ALOAD)
 			return true;
@@ -590,10 +748,10 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 
 		// Map known value types to constant value instructions.
 		return switch (value) {
-			case IntValue intValue -> AsmInsnUtil.intToInsn(intValue.value().getAsInt());
-			case FloatValue floatValue -> AsmInsnUtil.floatToInsn((float) floatValue.value().getAsDouble());
-			case DoubleValue doubleValue -> AsmInsnUtil.doubleToInsn(doubleValue.value().getAsDouble());
-			case LongValue longValue -> AsmInsnUtil.longToInsn(longValue.value().getAsLong());
+			case IntValue intValue -> intToInsn(intValue.value().getAsInt());
+			case FloatValue floatValue -> floatToInsn((float) floatValue.value().getAsDouble());
+			case DoubleValue doubleValue -> doubleToInsn(doubleValue.value().getAsDouble());
+			case LongValue longValue -> longToInsn(longValue.value().getAsLong());
 			case StringValue stringValue -> new LdcInsnNode(stringValue.getText().get());
 			default -> null;
 		};
@@ -721,7 +879,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 				if (intermediates == null)
 					intermediates = new ArrayList<>();
 				intermediates.add(insnBeforeOp);
-				intermediateStackConsumption += AsmInsnUtil.getSizeConsumed(insnBeforeOp);
+				intermediateStackConsumption += getSizeConsumed(insnBeforeOp);
 				insnBeforeOp = insnBeforeOp.getPrevious();
 			} else {
 				break;
@@ -758,7 +916,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 				continue;
 			if (isSupportedValueProducer(insn)) {
 				intermediates.add(insn);
-				intermediateStackConsumption -= AsmInsnUtil.getSizeProduced(insn);
+				intermediateStackConsumption -= getSizeProduced(insn);
 			} else {
 				// We don't know how to handle this instruction, bail out.
 				return false;
@@ -946,7 +1104,7 @@ public class OpaqueConstantFoldingTransformer implements JvmClassTransformer {
 
 			// Cover cases like long/doubles
 			int totalArgSize = arg1Size + arg2Size;
-			if (AsmInsnUtil.getSizeProduced(insn) == totalArgSize)
+			if (getSizeProduced(insn) == totalArgSize)
 				return true;
 
 			// The ONLY case where this is valid is DUP2 for some non-wide op (like IADD).
