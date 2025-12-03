@@ -21,6 +21,7 @@ import software.coley.recaf.analytics.logging.Logging;
 import software.coley.recaf.info.JvmClassInfo;
 import software.coley.recaf.services.decompile.DecompilerManager;
 import software.coley.recaf.services.decompile.JvmDecompiler;
+import software.coley.recaf.services.workspace.WorkspaceManager;
 import software.coley.recaf.ui.config.RecentFilesConfig;
 import software.coley.recaf.ui.control.ActionButton;
 import software.coley.recaf.ui.control.BoundLabel;
@@ -66,7 +67,8 @@ public class DecompileAllPopup extends RecafStage {
 	public DecompileAllPopup(@Nonnull DecompilerManager decompilerManager,
 	                         @Nonnull RecentFilesConfig recentFilesConfig,
 	                         @Nonnull DecompilerPaneConfig decompilerPaneConfig,
-	                         @Nonnull Workspace workspace) {
+	                         @Nonnull WorkspaceManager workspaceManager) {
+		Workspace workspace = workspaceManager.getCurrent();
 		String defaultName = buildName(workspace);
 
 		targetBundle = workspace.getPrimaryResource().getJvmClassBundle();
@@ -174,6 +176,7 @@ public class DecompileAllPopup extends RecafStage {
 		decompileButton.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
 		decompilerCombo.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
 		progress.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+		decompilerLabel.setMinWidth(85); // Ensure the labels do not get squished when a large path is selected
 		layout.add(decompilerLabel, 0, 0);
 		layout.add(decompilerCombo, 1, 0);
 		layout.add(pathLabel, 0, 1);

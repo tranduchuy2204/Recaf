@@ -33,6 +33,7 @@ import software.coley.recaf.services.mapping.MappingApplicationListener;
 import software.coley.recaf.services.mapping.MappingListeners;
 import software.coley.recaf.services.mapping.MappingResults;
 import software.coley.recaf.services.mapping.Mappings;
+import software.coley.recaf.services.tutorial.TutorialWorkspaceResource;
 import software.coley.recaf.services.workspace.WorkspaceManager;
 import software.coley.recaf.util.StringUtil;
 import software.coley.recaf.util.TestEnvironment;
@@ -40,8 +41,10 @@ import software.coley.recaf.workspace.model.Workspace;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -183,8 +186,10 @@ public class CommentManager implements Service, CommentUpdateListener, CommentCo
 								comment = StringUtil.wordWrap(comment, wordWrapLimit);
 
 							if (comment.contains("\n")) {
-								// The calculated indent includes the '\n' so we can just for-each the comment lines and prefix it.
-								String indent = code.substring(Math.max(0, code.lastIndexOf("\n", commentIndex)), commentIndex);
+								// The indent starts after the '\n' so that in cases where there isn't a '\n' found we
+								// will consistently insert one.
+								int indentBegin = Math.max(0, code.lastIndexOf("\n", commentIndex) + 1);
+								String indent = '\n' + code.substring(indentBegin, commentIndex);
 								StringBuilder sb = new StringBuilder("/**");
 								comment.lines().forEach(line -> sb.append(indent).append(" * ").append(line));
 								sb.append(indent).append(" */");
@@ -334,9 +339,31 @@ public class CommentManager implements Service, CommentUpdateListener, CommentCo
 	 */
 	@PreDestroy
 	private void onShutdown() {
-		// Skip persist in test environment
+		// Skip persist in test environment.
 		if (TestEnvironment.isTestEnv())
 			return;
+
+		// Do not persist the tutorial workspace comments.
+		persistMap.remove(TutorialWorkspaceResource.COMMENT_KEY);
+
+		// Remove entries that are empty.
+		Set<String> empty = new HashSet<>();
+		persistMap.forEach((key, workspaceComments) -> {
+			if (workspaceComments.classKeys().isEmpty()) {
+				empty.add(key);
+			} else {
+				boolean isEmpty = true;
+				for (ClassComments classComments : workspaceComments) {
+					if (classComments.hasComments()) {
+						isEmpty = false;
+						break;
+					}
+				}
+				if (isEmpty)
+					empty.add(key);
+			}
+		});
+		empty.forEach(persistMap::remove);
 
 		try {
 			Gson gson = gsonProvider.getGson();
@@ -432,6 +459,18 @@ public class CommentManager implements Service, CommentUpdateListener, CommentCo
 		if (!workspaceManager.hasCurrentWorkspace())
 			return null;
 		return getOrCreateWorkspaceComments(workspaceManager.getCurrent());
+	}
+
+	/**
+	 * @param workspace
+	 * 		Workspace to remove comments of.
+	 *
+	 * @return {@code true} if a workspace was found and removed.
+	 * {@code false} if no comments existed for the workspace.
+	 */
+	public boolean removeWorkspaceComments(@Nonnull Workspace workspace) {
+		String input = CommentKey.workspaceInput(workspace);
+		return persistMap.remove(input) != null || delegatingMap.remove(input) != null;
 	}
 
 	/**

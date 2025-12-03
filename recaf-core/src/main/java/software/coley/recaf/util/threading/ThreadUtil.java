@@ -45,12 +45,14 @@ public class ThreadUtil {
 	/**
 	 * @param action
 	 * 		Supplier to start in new thread.
+	 * @param fallback
+	 * 		Fallback value if the supplier encounters a failure.
 	 *
 	 * @return Thread future.
 	 */
 	@Nonnull
-	public static <T> CompletableFuture<T> run(@Nonnull Supplier<T> action) {
-		return CompletableFuture.supplyAsync(action, scheduledService);
+	public static <T> CompletableFuture<T> supply(@Nonnull Supplier<T> action, @Nullable T fallback) {
+		return CompletableFuture.supplyAsync(wrap(action, fallback), scheduledService);
 	}
 
 	/**
@@ -69,6 +71,7 @@ public class ThreadUtil {
 				action.run();
 				future.complete(null);
 			} catch (Throwable t) {
+				logger.error("Unhandled exception on thread '{}'", Thread.currentThread().getName(), t);
 				future.completeExceptionally(t);
 			}
 		}, delayMs, TimeUnit.MILLISECONDS);
